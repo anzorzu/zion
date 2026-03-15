@@ -273,6 +273,47 @@ canvas#rain {
 
 .room-chevron { color:var(--text-dim); font-size:18px; margin-left:8px; }
 
+.delete-btn {
+  background:transparent;
+  border:1px solid rgba(255,0,60,0.3);
+  color:rgba(255,0,60,0.5);
+  font-family:'Share Tech Mono', monospace;
+  font-size:11px;
+  padding:5px 8px;
+  cursor:pointer;
+  letter-spacing:1px;
+  margin-left:8px;
+  flex-shrink:0;
+  transition:all 0.2s;
+  -webkit-appearance:none;
+  border-radius:0;
+}
+.delete-btn:active { background:rgba(255,0,60,0.15); color:#ff003c; border-color:#ff003c; }
+
+/* Avatar on login */
+.avatar-wrap {
+  width:90px; height:90px;
+  border:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center;
+  position:relative;
+  overflow:hidden;
+  flex-shrink:0;
+}
+.avatar-wrap img { width:100%; height:100%; object-fit:cover; }
+.avatar-placeholder {
+  font-family:'VT323', monospace;
+  font-size:36px;
+  color:var(--green-dark);
+  letter-spacing:2px;
+}
+.avatar-loading {
+  font-size:10px;
+  color:var(--text-dim);
+  letter-spacing:2px;
+  text-align:center;
+  animation:blink 1s infinite;
+}
+
 .section-label {
   padding:10px 16px 6px;
   font-size:10px;
@@ -527,6 +568,48 @@ canvas#rain {
 
 .messages-scroll::-webkit-scrollbar { display:none; }
 .rooms-scroll::-webkit-scrollbar { display:none; }
+
+/* ── TABS ── */
+.tabs-bar {
+  display:flex;
+  border-bottom:1px solid var(--border);
+  background:var(--panel);
+  flex-shrink:0;
+}
+
+.tab {
+  flex:1;
+  text-align:center;
+  padding:12px 0;
+  font-size:11px;
+  letter-spacing:3px;
+  color:var(--text-dim);
+  cursor:pointer;
+  border-bottom:2px solid transparent;
+  transition:all 0.2s;
+}
+
+.tab.active {
+  color:var(--green);
+  border-bottom-color:var(--green);
+  text-shadow:0 0 8px var(--green);
+}
+
+.tab:active { background:var(--green-glow); }
+
+#panel-rooms {
+  display:flex;
+  flex-direction:column;
+  flex:1;
+  overflow:hidden;
+}
+
+#panel-dm {
+  display:none;
+  flex-direction:column;
+  flex:1;
+  overflow:hidden;
+}
 </style>
 </head>
 <body>
@@ -561,16 +644,40 @@ canvas#rain {
     <div class="dot-live"></div>
     <div class="online-text" id="handle-display">—</div>
   </div>
-  <div class="join-bar">
-    <input class="join-input" id="room-input" type="text"
-      placeholder="НАЗВАНИЕ КОМНАТЫ..."
-      maxlength="20"
-      autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
-      onkeydown="if(event.key==='Enter')joinRoom()" />
-    <button class="join-btn" onclick="joinRoom()">JOIN</button>
+
+  <!-- Табы -->
+  <div class="tabs-bar">
+    <div class="tab active" id="tab-rooms" onclick="switchTab('rooms')">КОМНАТЫ</div>
+    <div class="tab" id="tab-dm" onclick="switchTab('dm')">ЛИЧНЫЕ</div>
   </div>
-  <div class="section-label">// АКТИВНЫЕ КОМНАТЫ</div>
-  <div class="rooms-scroll" id="rooms-list"></div>
+
+  <!-- Панель комнат -->
+  <div id="panel-rooms">
+    <div class="join-bar">
+      <input class="join-input" id="room-input" type="text"
+        placeholder="НАЗВАНИЕ КОМНАТЫ..."
+        maxlength="20"
+        autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+        onkeydown="if(event.key==='Enter')joinRoom()" />
+      <button class="join-btn" onclick="joinRoom()">JOIN</button>
+    </div>
+    <div class="section-label">// АКТИВНЫЕ КОМНАТЫ</div>
+    <div class="rooms-scroll" id="rooms-list"></div>
+  </div>
+
+  <!-- Панель личных сообщений -->
+  <div id="panel-dm" style="display:none;flex:1;flex-direction:column">
+    <div class="join-bar">
+      <input class="join-input" id="dm-input" type="text"
+        placeholder="НИК СОБЕСЕДНИКА..."
+        maxlength="20"
+        autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+        onkeydown="if(event.key==='Enter')startDM()" />
+      <button class="join-btn" onclick="startDM()">DM</button>
+    </div>
+    <div class="section-label">// ЛИЧНЫЕ ЧАТЫ</div>
+    <div class="rooms-scroll" id="dm-list"></div>
+  </div>
 </div>
 
 <!-- ── CHAT ── -->
@@ -715,14 +822,13 @@ function renderRooms() {
   recentRooms.forEach(r => {
     const div = document.createElement('div');
     div.className = 'room-row';
-    div.onclick = () => enterRoom(r);
     div.innerHTML = `
-      <div class="room-icon">#</div>
-      <div class="room-info">
+      <div class="room-icon" style="cursor:pointer" onclick="enterRoom('${r}')">#</div>
+      <div class="room-info" style="cursor:pointer" onclick="enterRoom('${r}')">
         <div class="room-name">#${r}</div>
         <div class="room-desc">Нажми чтобы войти</div>
       </div>
-      <div class="room-chevron">›</div>
+      <button class="delete-btn" onclick="deleteRoom('${r}')">✕</button>
     `;
     list.appendChild(div);
   });
@@ -735,9 +841,11 @@ function joinRoom() {
   enterRoom(val);
 }
 
-function enterRoom(roomName) {
+function enterRoom(roomName, displayName) {
   currentRoom = roomName;
-  let joinAnnounced = false; // флаг — анонс отправляем только один раз
+  const isDM = roomName.startsWith('DM_');
+  const chatTitle = displayName ? '@ ' + displayName : '#' + roomName;
+  let joinAnnounced = false;
 
   recentRooms = [roomName, ...recentRooms.filter(r => r !== roomName)].slice(0, 10);
   localStorage.setItem('zion_rooms', JSON.stringify(recentRooms));
@@ -758,7 +866,7 @@ function enterRoom(roomName) {
   currentChannel = ably.channels.get('zion:' + roomName);
   typingChannel  = ably.channels.get('zion:' + roomName + ':typing');
 
-  document.getElementById('chat-room-name').textContent = '#' + roomName;
+  document.getElementById('chat-room-name').textContent = chatTitle;
   document.getElementById('messages-scroll').innerHTML = '';
   showScreen('screen-chat');
 
@@ -789,7 +897,7 @@ function enterRoom(roomName) {
   currentChannel.once('attached', () => {
     if (!joinAnnounced) {
       joinAnnounced = true;
-      currentChannel.publish('system', { text: myHandle + ' joined the channel' });
+      if (!isDM) currentChannel.publish('system', { text: myHandle + ' joined the channel' });
     }
   });
 
@@ -799,6 +907,134 @@ function enterRoom(roomName) {
   });
 
   setTimeout(() => document.getElementById('chat-input').focus(), 350);
+}
+
+// ── TABS ─────────────────────────────────────────────
+function switchTab(tab) {
+  document.getElementById('tab-rooms').classList.toggle('active', tab === 'rooms');
+  document.getElementById('tab-dm').classList.toggle('active', tab === 'dm');
+  document.getElementById('panel-rooms').style.display = tab === 'rooms' ? 'flex' : 'none';
+  document.getElementById('panel-dm').style.display   = tab === 'dm'    ? 'flex' : 'none';
+  if (tab === 'dm') renderDMList();
+}
+
+// ── DIRECT MESSAGES ──────────────────────────────────
+let recentDMs = JSON.parse(localStorage.getItem('zion_dms') || '[]');
+
+function dmRoomName(a, b) {
+  // Одинаковое имя комнаты для обоих — сортируем ники алфавитно
+  return 'DM_' + [a, b].sort().join('_');
+}
+
+function startDM() {
+  const val = document.getElementById('dm-input').value.trim().toUpperCase().replace(/[^A-Z0-9_]/g,'_');
+  if (!val) { toast('ВВЕДИ НИК СОБЕСЕДНИКА'); return; }
+  if (val === myHandle) { toast('НЕЛЬЗЯ ПИСАТЬ САМОМУ СЕБЕ'); return; }
+  document.getElementById('dm-input').value = '';
+  const roomName = dmRoomName(myHandle, val);
+  // Сохраняем в список DM
+  recentDMs = [{ nick: val, room: roomName }, ...recentDMs.filter(d => d.nick !== val)].slice(0, 20);
+  localStorage.setItem('zion_dms', JSON.stringify(recentDMs));
+  enterRoom(roomName, val); // второй аргумент — ник собеседника для заголовка
+}
+
+function renderDMList() {
+  const list = document.getElementById('dm-list');
+  list.innerHTML = '';
+  if (!recentDMs.length) {
+    list.innerHTML = '<div style="text-align:center;color:var(--text-dim);font-size:11px;letter-spacing:2px;padding:40px 20px">НЕТ ЛИЧНЫХ ЧАТОВ<br><br>Введи ник друга выше</div>';
+    return;
+  }
+  recentDMs.forEach(d => {
+    const div = document.createElement('div');
+    div.className = 'room-row';
+    div.innerHTML = `
+      <div class="room-icon" style="font-size:14px;cursor:pointer" onclick="enterRoom('${d.room}','${d.nick}')">@</div>
+      <div class="room-info" style="cursor:pointer" onclick="enterRoom('${d.room}','${d.nick}')">
+        <div class="room-name">@ ${d.nick}</div>
+        <div class="room-desc">Личный чат</div>
+      </div>
+      <button class="delete-btn" onclick="deleteDM('${d.nick}','${d.room}')">✕</button>
+    `;
+    list.appendChild(div);
+  });
+}
+
+// ── DELETE ROOM / DM ─────────────────────────────────
+function deleteRoom(name) {
+  recentRooms = recentRooms.filter(r => r !== name);
+  localStorage.setItem('zion_rooms', JSON.stringify(recentRooms));
+  localStorage.removeItem('zion_history:' + name);
+  renderRooms();
+  toast('КОМНАТА УДАЛЕНА');
+}
+
+function deleteDM(nick, room) {
+  recentDMs = recentDMs.filter(d => d.nick !== nick);
+  localStorage.setItem('zion_dms', JSON.stringify(recentDMs));
+  localStorage.removeItem('zion_history:' + room);
+  renderDMList();
+  toast('ЧАТ УДАЛЁН');
+}
+
+// ── AVATAR GENERATION ────────────────────────────────
+let avatarTimer = null;
+let lastAvatarHandle = '';
+
+function onHandleInput(val) {
+  const clean = val.trim().toUpperCase().replace(/[^A-Z0-9_]/g,'_');
+  // Update placeholder letter
+  document.getElementById('avatar-placeholder').textContent = clean ? clean[0] : '?';
+  // Debounce — generate avatar after 1.2s of no typing
+  clearTimeout(avatarTimer);
+  if (clean.length < 2) return;
+  avatarTimer = setTimeout(() => generateAvatar(clean), 1200);
+}
+
+async function generateAvatar(handle) {
+  if (handle === lastAvatarHandle) return;
+  // Check cache first
+  const cached = localStorage.getItem('zion_avatar:' + handle);
+  if (cached) {
+    showAvatar(cached);
+    lastAvatarHandle = handle;
+    return;
+  }
+
+  const wrap = document.getElementById('avatar-wrap');
+  wrap.innerHTML = '<div class="avatar-loading">GENERATING...</div>';
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        messages: [{
+          role: 'user',
+          content: `Generate a small ASCII art portrait (10 lines max, 20 chars wide) for a hacker with the callsign "${handle}" in Matrix terminal style. Use only ASCII characters and green matrix symbols. Return ONLY the ASCII art, nothing else.`
+        }]
+      })
+    });
+    const data = await resp.json();
+    const art = data.content?.[0]?.text || handle[0];
+    localStorage.setItem('zion_avatar:' + handle, art);
+    lastAvatarHandle = handle;
+    showAvatar(art);
+  } catch(e) {
+    wrap.innerHTML = `<div class="avatar-placeholder">${handle[0]}</div>`;
+  }
+}
+
+function showAvatar(art) {
+  const wrap = document.getElementById('avatar-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<pre style="font-size:7px;line-height:1.2;color:var(--green);text-align:center;padding:4px;font-family:Share Tech Mono,monospace;text-shadow:0 0 4px var(--green)">${escArt(art)}</pre>`;
+}
+
+function escArt(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function leaveRoom() {
