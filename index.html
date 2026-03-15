@@ -582,7 +582,10 @@ canvas#rain {
       <div class="chat-header-name" id="chat-room-name">—</div>
       <div class="chat-header-status" id="chat-members">—</div>
     </div>
-    <button class="navbar-btn" onclick="copyRoomLink()" style="font-size:10px">SHARE</button>
+    <div style="display:flex;gap:6px">
+      <button class="navbar-btn" id="sound-btn" onclick="toggleSound()" style="font-size:14px">🔊</button>
+      <button class="navbar-btn" onclick="copyRoomLink()" style="font-size:10px">SHARE</button>
+    </div>
   </div>
   <div class="conn-status" id="conn-status">⚠ RECONNECTING...</div>
   <div class="messages-scroll" id="messages-scroll"></div>
@@ -660,12 +663,14 @@ function enterSystem() {
       showConnStatus(false);
       if (!shownRooms) {
         shownRooms = true;
+        playSound('login');
         showScreen('screen-rooms');
         document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
         renderRooms();
       }
     } else if (stateChange.current === 'disconnected' || stateChange.current === 'suspended') {
       showConnStatus(true);
+      playSound('alert');
     }
   });
 }
@@ -737,8 +742,9 @@ function enterRoom(roomName) {
   // Подписываемся на сообщения
   currentChannel.subscribe('msg', (msg) => {
     const d = msg.data;
-    const isMine = d.handle === myHandle;
-    appendMessage(d.handle, d.text, d.time, isMine);
+    // Своё сообщение уже показано optimistically — пропускаем эхо от Ably
+    if (d.handle === myHandle) return;
+    appendMessage(d.handle, d.text, d.time, false);
   });
 
   currentChannel.subscribe('system', (msg) => {
@@ -788,6 +794,7 @@ function updateMembers() {
 // ── MESSAGES ─────────────────────────────────────────
 function appendMessage(handle, text, time, isMine) {
   hideTyping();
+  if (!isMine) playSound('recv');
   const scroll = document.getElementById('messages-scroll');
   const wrap = document.createElement('div');
   wrap.className = 'msg-wrap ' + (isMine ? 'sent' : 'recv');
@@ -801,6 +808,7 @@ function appendMessage(handle, text, time, isMine) {
 }
 
 function appendSystem(text) {
+  if (text.includes('joined')) playSound('join');
   const scroll = document.getElementById('messages-scroll');
   const div = document.createElement('div');
   div.className = 'system-msg';
@@ -820,9 +828,8 @@ function sendMsg() {
   if (!text || !currentChannel) return;
 
   const time = new Date().toTimeString().slice(0,5);
-  // Show own message immediately (optimistic UI)
+  playSound('send');
   appendMessage(myHandle, text, time, true);
-  // Publish to others (server will echo back, but we skip own echoes in subscriber)
   currentChannel.publish('msg', { handle: myHandle, text, time });
 
   inp.value = '';
@@ -879,10 +886,110 @@ function copyRoomLink() {
   }
 }
 
+// ── SOUND ENGINE (Web Audio API) ─────────────────────
+let audioCtx = null;
+let soundEnabled = true;
+
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+document.addEventListener('touchstart', () => {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}, { once: true });
+
+function playSound(type) {
+  if (!soundEnabled) return;
+  try {
+    const ac = getAudio();
+    if (ac.state === 'suspended') ac.resume();
+    switch(type) {
+      case 'recv': {
+        [0, 120].forEach((delay, i) => {
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          const t = ac.currentTime + delay/1000;
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(440 + i*280, t);
+          osc.frequency.exponentialRampToValueAtTime(880 + i*280, t + 0.08);
+          gain.gain.setValueAtTime(0, t);
+          gain.gain.linearRampToValueAtTime(0.18, t + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          osc.start(t); osc.stop(t + 0.15);
+        });
+        break;
+      }
+      case 'send': {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.connect(gain); gain.connect(ac.destination);
+        const t = ac.currentTime;
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(600, t);
+        osc.frequency.exponentialRampToValueAtTime(200, t + 0.06);
+        gain.gain.setValueAtTime(0.08, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+        osc.start(t); osc.stop(t + 0.07);
+        break;
+      }
+      case 'join': {
+        [0, 80, 160].forEach((delay, i) => {
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          const t = ac.currentTime + delay/1000;
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime([330, 440, 660][i], t);
+          gain.gain.setValueAtTime(0.1, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+          osc.start(t); osc.stop(t + 0.25);
+        });
+        break;
+      }
+      case 'alert': {
+        [0, 200, 400].forEach((delay) => {
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          const t = ac.currentTime + delay/1000;
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(220, t);
+          gain.gain.setValueAtTime(0.07, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          osc.start(t); osc.stop(t + 0.15);
+        });
+        break;
+      }
+      case 'login': {
+        [200, 280, 380, 520, 700, 940].forEach((freq, i) => {
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          const t = ac.currentTime + i * 0.07;
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, t);
+          gain.gain.setValueAtTime(0.12, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+          osc.start(t); osc.stop(t + 0.18);
+        });
+        break;
+      }
+    }
+  } catch(e) {}
+}
+
 // ── UTILS ─────────────────────────────────────────────
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
   document.getElementById(id).classList.remove('hidden');
+}
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  document.getElementById('sound-btn').textContent = soundEnabled ? '🔊' : '🔇';
+  if (soundEnabled) playSound('send');
 }
 
 function showConnStatus(show) {
