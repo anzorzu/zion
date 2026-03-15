@@ -649,12 +649,19 @@ function enterSystem() {
   myHandle = val;
   localStorage.setItem('zion_handle', myHandle);
 
-  // Connect Ably with auto-reconnect options
+  // Уникальный clientId — ник + случайный суффикс чтобы не конфликтовать с другими вкладками
+  const uniqueId = myHandle + '_' + Math.random().toString(36).slice(2, 7);
+
   ably = new Ably.Realtime({
     key: ABLY_KEY,
-    clientId: myHandle,
-    disconnectedRetryTimeout: 5000,
-    suspendedRetryTimeout: 10000,
+    clientId: uniqueId,
+    // Принудительно WebSocket, без HTTP fallback
+    transports: ['web_socket'],
+    // Быстрее реагируем на обрывы
+    disconnectedRetryTimeout: 2000,
+    suspendedRetryTimeout: 5000,
+    // Heartbeat каждые 15 сек чтобы не засыпало
+    heartbeatInterval: 15000,
   });
 
   let shownRooms = false;
@@ -662,11 +669,17 @@ function enterSystem() {
     if (stateChange.current === 'connected') {
       showConnStatus(false);
       if (!shownRooms) {
+        // Первое подключение — показываем экран комнат
         shownRooms = true;
         playSound('login');
         showScreen('screen-rooms');
         document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
         renderRooms();
+      } else {
+        // Переподключение — тихо восстанавливаем presence без "joined"
+        if (currentChannel) {
+          try { currentChannel.presence.update({ handle: myHandle }); } catch(e) {}
+        }
       }
     } else if (stateChange.current === 'disconnected' || stateChange.current === 'suspended') {
       showConnStatus(true);
