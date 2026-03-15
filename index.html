@@ -646,15 +646,28 @@ function enterSystem() {
   myHandle = val;
   localStorage.setItem('zion_handle', myHandle);
 
-  // Connect Ably
-  ably = new Ably.Realtime({ key: ABLY_KEY, clientId: myHandle });
-  ably.connection.on('connected', () => {
-    showScreen('screen-rooms');
-    document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
-    renderRooms();
+  // Connect Ably with auto-reconnect options
+  ably = new Ably.Realtime({
+    key: ABLY_KEY,
+    clientId: myHandle,
+    disconnectedRetryTimeout: 5000,
+    suspendedRetryTimeout: 10000,
   });
-  ably.connection.on('disconnected', () => showConnStatus(true));
-  ably.connection.on('connected', () => showConnStatus(false));
+
+  let shownRooms = false;
+  ably.connection.on((stateChange) => {
+    if (stateChange.current === 'connected') {
+      showConnStatus(false);
+      if (!shownRooms) {
+        shownRooms = true;
+        showScreen('screen-rooms');
+        document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
+        renderRooms();
+      }
+    } else if (stateChange.current === 'disconnected' || stateChange.current === 'suspended') {
+      showConnStatus(true);
+    }
+  });
 }
 
 function logout() {
@@ -697,43 +710,57 @@ function joinRoom() {
 
 function enterRoom(roomName) {
   currentRoom = roomName;
+  let joinAnnounced = false; // флаг — анонс отправляем только один раз
 
-  // Save to recent
   recentRooms = [roomName, ...recentRooms.filter(r => r !== roomName)].slice(0, 10);
   localStorage.setItem('zion_rooms', JSON.stringify(recentRooms));
 
-  // Subscribe to channel
-  if (currentChannel) currentChannel.detach();
+  // Полностью чистим старые каналы
+  if (currentChannel) {
+    try { currentChannel.unsubscribe(); currentChannel.presence.unsubscribe(); currentChannel.detach(); } catch(e){}
+  }
+  if (typingChannel) {
+    try { typingChannel.unsubscribe(); typingChannel.detach(); } catch(e){}
+  }
+
+  // Получаем свежий инстанс канала
+  ably.channels.release('zion:' + roomName);
+  ably.channels.release('zion:' + roomName + ':typing');
+
   currentChannel = ably.channels.get('zion:' + roomName);
-  typingChannel = ably.channels.get('zion:' + roomName + ':typing');
+  typingChannel  = ably.channels.get('zion:' + roomName + ':typing');
 
   document.getElementById('chat-room-name').textContent = '#' + roomName;
   document.getElementById('messages-scroll').innerHTML = '';
   showScreen('screen-chat');
 
-  // Subscribe to messages
+  // Подписываемся на сообщения
   currentChannel.subscribe('msg', (msg) => {
     const d = msg.data;
-    appendMessage(d.handle, d.text, d.time, d.handle === myHandle);
+    const isMine = d.handle === myHandle;
+    appendMessage(d.handle, d.text, d.time, isMine);
   });
 
-  // Subscribe to system messages
   currentChannel.subscribe('system', (msg) => {
     appendSystem(msg.data.text);
   });
 
-  // Subscribe to typing
-  typingChannel.subscribe('typing', (msg) => {
-    if (msg.data.handle !== myHandle) showTyping(msg.data.handle);
-  });
-
-  // Presence
+  // Presence + анонс входа только один раз
   currentChannel.presence.enter({ handle: myHandle });
   currentChannel.presence.subscribe(() => updateMembers());
   updateMembers();
 
-  // Announce join
-  currentChannel.publish('system', { text: myHandle + ' joined the channel' });
+  currentChannel.once('attached', () => {
+    if (!joinAnnounced) {
+      joinAnnounced = true;
+      currentChannel.publish('system', { text: myHandle + ' joined the channel' });
+    }
+  });
+
+  // Typing channel
+  typingChannel.subscribe('typing', (msg) => {
+    if (msg.data.handle !== myHandle) showTyping(msg.data.handle);
+  });
 
   setTimeout(() => document.getElementById('chat-input').focus(), 350);
 }
@@ -793,6 +820,9 @@ function sendMsg() {
   if (!text || !currentChannel) return;
 
   const time = new Date().toTimeString().slice(0,5);
+  // Show own message immediately (optimistic UI)
+  appendMessage(myHandle, text, time, true);
+  // Publish to others (server will echo back, but we skip own echoes in subscriber)
   currentChannel.publish('msg', { handle: myHandle, text, time });
 
   inp.value = '';
