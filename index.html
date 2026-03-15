@@ -643,7 +643,7 @@ let typingChannel = null;
 let membersMap = {};
 
 // ── LOGIN ─────────────────────────────────────────────
-function enterSystem() {
+function enterSystem(silent) {
   const val = document.getElementById('handle-input').value.trim().toUpperCase().replace(/[^A-Z0-9_]/g,'_');
   if (!val || val.length < 2) { toast('ВВЕДИ НИК (мин. 2 символа)'); return; }
   myHandle = val;
@@ -671,10 +671,19 @@ function enterSystem() {
       if (!shownRooms) {
         // Первое подключение — показываем экран комнат
         shownRooms = true;
-        playSound('login');
-        showScreen('screen-rooms');
-        document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
-        renderRooms();
+        const lastRoom = localStorage.getItem('zion_last_room');
+        if (silent && lastRoom) {
+          // Тихое восстановление — сразу в комнату
+          showScreen('screen-rooms');
+          document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
+          renderRooms();
+          enterRoom(lastRoom);
+        } else {
+          playSound('login');
+          showScreen('screen-rooms');
+          document.getElementById('handle-display').textContent = myHandle + ' // ONLINE';
+          renderRooms();
+        }
       } else {
         // Переподключение — тихо восстанавливаем presence без "joined"
         if (currentChannel) {
@@ -732,6 +741,7 @@ function enterRoom(roomName) {
 
   recentRooms = [roomName, ...recentRooms.filter(r => r !== roomName)].slice(0, 10);
   localStorage.setItem('zion_rooms', JSON.stringify(recentRooms));
+  localStorage.setItem('zion_last_room', roomName);
 
   // Полностью чистим старые каналы
   if (currentChannel) {
@@ -751,6 +761,13 @@ function enterRoom(roomName) {
   document.getElementById('chat-room-name').textContent = '#' + roomName;
   document.getElementById('messages-scroll').innerHTML = '';
   showScreen('screen-chat');
+
+  // Загружаем локальную историю сразу
+  const history = loadHistory(roomName);
+  if (history.length > 0) {
+    history.forEach(m => appendMessage(m.handle, m.text, m.time, m.handle === myHandle, true));
+    appendSystem('// история загружена (' + history.length + ' сообщений)');
+  }
 
   // Подписываемся на сообщения
   currentChannel.subscribe('msg', (msg) => {
@@ -791,6 +808,7 @@ function leaveRoom() {
     currentChannel.detach();
     currentChannel = null;
   }
+  localStorage.removeItem('zion_last_room');
   showScreen('screen-rooms');
   renderRooms();
 }
@@ -805,9 +823,25 @@ function updateMembers() {
 }
 
 // ── MESSAGES ─────────────────────────────────────────
-function appendMessage(handle, text, time, isMine) {
+function saveToHistory(room, handle, text, time) {
+  const key = 'zion_history:' + room;
+  const history = JSON.parse(localStorage.getItem(key) || '[]');
+  history.push({ handle, text, time });
+  // Храним последние 200 сообщений
+  if (history.length > 200) history.splice(0, history.length - 200);
+  localStorage.setItem(key, JSON.stringify(history));
+}
+
+function loadHistory(room) {
+  const key = 'zion_history:' + room;
+  return JSON.parse(localStorage.getItem(key) || '[]');
+}
+
+function appendMessage(handle, text, time, isMine, skipSave) {
   hideTyping();
   if (!isMine) playSound('recv');
+  // Сохраняем в локальную историю
+  if (!skipSave) saveToHistory(currentRoom, handle, text, time);
   const scroll = document.getElementById('messages-scroll');
   const wrap = document.createElement('div');
   wrap.className = 'msg-wrap ' + (isMine ? 'sent' : 'recv');
@@ -1027,8 +1061,21 @@ function checkUrlRoom() {
 
 // ── RESTORE SESSION ───────────────────────────────────
 const savedHandle = localStorage.getItem('zion_handle');
+const savedRoom   = localStorage.getItem('zion_last_room');
+
 if (savedHandle) {
   document.getElementById('handle-input').value = savedHandle;
+}
+
+// Автовосстановление — если был ник и комната, входим сразу
+if (savedHandle && savedRoom) {
+  // Небольшая задержка чтобы DOM прогрузился
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      document.getElementById('handle-input').value = savedHandle;
+      enterSystem(true); // true = silent restore, не играем login звук
+    }, 100);
+  });
 }
 
 // Keyboard scroll fix for iOS
